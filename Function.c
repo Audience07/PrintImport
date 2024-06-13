@@ -1001,11 +1001,11 @@ void _PrintImport(LPVOID FileBuffer) {
 					break;
 				}
 				FunctionName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, *(DWORD*)ThunkData) + 0x2;
-				printf("[+]函数名称:%s\n", FunctionName);
+				printf(" - 函数名称:%s\n", FunctionName);
 			}
 			else
 			{
-				printf("[+]导入序号:%d\n", *(WORD*)ThunkData);
+				printf(" - 导入序号:%d\n", *(WORD*)ThunkData);
 			}
 			
 
