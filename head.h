@@ -85,8 +85,16 @@ LPVOID _GetFunctionAddrByName(LPVOID FileBuffer, LPSTR FunctionName);
 //读取重定位表
 void _PrintReloc(LPVOID FileBuffer);
 
-//打印导出表
-void _PrintImport(LPVOID FileBuffer);
+//打印导入表
+void _PrintImport(IN LPVOID FileBuffer);
+
+//打印导入表_x64
+void _PrintImport_x64(IN LPVOID FileBuffer);
+
+//打印BoundImport
+void _ShowBoundImport(IN LPVOID FileBuffer);
+//打印BoundImport_x64
+void _ShowBoundImport_x64(LPVOID FileBuffer);
 
 
 

@@ -480,10 +480,18 @@ DWORD _FindRVASection(LPVOID FileBuffer, DWORD RVA,struct FileSign* pFileSign,st
 
 //已重写
 DWORD _RVAToFOA(LPVOID FileBuffer,DWORD RVA) {
-	
+	if (!RVA) {
+		return 0;
+	}
 	PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)FileBuffer;
 	PIMAGE_NT_HEADERS NTHeader = (PIMAGE_NT_HEADERS)((DWORD)FileBuffer + DosHeader->e_lfanew);
 	PIMAGE_SECTION_HEADER SectionHeader = (PIMAGE_SECTION_HEADER)((DWORD)&NTHeader->OptionalHeader + NTHeader->FileHeader.SizeOfOptionalHeader);
+
+	//在PE头中，RVA的偏移和FOA的偏移是相同的
+	//当RVA不在节表中，此时，RVA=FOA，返回RVA
+	if (RVA <= NTHeader->OptionalHeader.SizeOfHeaders) {
+		return RVA;
+	}
 
 	//定位所在节
 	int i;
@@ -502,6 +510,12 @@ DWORD _FOAToRVA(LPVOID FileBuffer, DWORD FOA) {
 	PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)FileBuffer;
 	PIMAGE_NT_HEADERS NTHeader = (PIMAGE_NT_HEADERS)((DWORD)FileBuffer + DosHeader->e_lfanew);
 	PIMAGE_SECTION_HEADER SectionHeader = (PIMAGE_SECTION_HEADER)((DWORD)&NTHeader->OptionalHeader + NTHeader->FileHeader.SizeOfOptionalHeader);
+	if (!FOA) 
+		return 0;
+	
+	if (FOA < NTHeader->OptionalHeader.SizeOfHeaders) {
+		return FOA;	
+	}
 
 	//定位所在节
 	int i;
@@ -971,47 +985,54 @@ DWORD _MoveReloc(LPVOID FileBuffer, LPVOID CodeBegin_FOA) {
 
 
 //打印导入表
-void _PrintImport(LPVOID FileBuffer) {
+void _PrintImport(IN LPVOID FileBuffer) {
 	//定位PE头
 	PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)FileBuffer;
 	PIMAGE_NT_HEADERS NTHeader = (PIMAGE_NT_HEADERS)((DWORD)FileBuffer + (DWORD)DosHeader->e_lfanew);
 	PIMAGE_SECTION_HEADER SectionHeader = (DWORD)&NTHeader->OptionalHeader + NTHeader->FileHeader.SizeOfOptionalHeader;
-	
+
 	//定位导入表
 	PIMAGE_IMPORT_DESCRIPTOR ImportTable = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, (DWORD)(NTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress));
+	if (!NTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress) {
+		printf("[-]IMAGE_DIRECTORY_ENTRY_IMPORT.VirtualAddress为0\n");
+		return;
+	}
 	//DLL名字
 	LPVOID DLLName;
 	//未加载到内存的THUNK表
 	PIMAGE_THUNK_DATA ThunkData;
-	LPSTR FunctionName;
+	PIMAGE_THUNK_DATA FirstThunk;
+	PIMAGE_IMPORT_BY_NAME FunctionName;
 
+	printf("OriginFirstThunk\n");
 	while (TRUE) {
-		
+
 		DLLName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, ImportTable->Name);
 		printf("[+]DLL名称:%s\n", DLLName);
 
-
+		
 		ThunkData = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, ImportTable->OriginalFirstThunk);
+		
 
 		while (TRUE)
 		{
 			//判断最高位是否为1,如果是1表明序号导入,不是1表明名字导如入
-			if (!(*(DWORD*)ThunkData & 0x80000000)) {
+			if (!(*(DWORD*)ThunkData & IMAGE_ORDINAL_FLAG32)) {
 				if (!*(DWORD*)ThunkData) {
 					break;
 				}
-				FunctionName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, *(DWORD*)ThunkData) + 0x2;
-				printf(" - 函数名称:%s\n", FunctionName);
+				FunctionName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, *(DWORD*)ThunkData);
+				printf(" - 函数名称:%s\n", FunctionName->Name);
 			}
 			else
 			{
-				printf(" - 导入序号:%d\n", *(WORD*)ThunkData);
+				printf(" - 导入序号:%d\n", IMAGE_ORDINAL32(*(DWORD*)ThunkData));
 			}
-			
+
 
 
 			ThunkData++;
-			if (!*(DWORD*)ThunkData){
+			if (!*(DWORD*)ThunkData) {
 				break;
 			}
 		}
@@ -1022,8 +1043,194 @@ void _PrintImport(LPVOID FileBuffer) {
 		if (!ImportTable->OriginalFirstThunk)
 			break;
 	}
+	//重置导入表
+	ImportTable = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, (DWORD)(NTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress));
+	printf("FirstThunk\n");
+	while (TRUE) {
+
+		DLLName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, ImportTable->Name);
+		printf("[+]DLL名称:%s\n", DLLName);
+
+
+		FirstThunk = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, ImportTable->FirstThunk);
+
+
+		while (TRUE)
+		{
+			//判断最高位是否为1,如果是1表明序号导入,不是1表明名字导如入
+			if (!(*(DWORD*)FirstThunk & IMAGE_ORDINAL_FLAG32)) {
+				if (!*(DWORD*)FirstThunk) {
+					break;
+				}
+				FunctionName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, *(DWORD*)FirstThunk);
+				printf(" - 函数名称:%s\n", FunctionName->Name);
+			}
+			else
+			{
+				printf(" - 导入序号:%d\n", IMAGE_ORDINAL32(*(DWORD*)FirstThunk));
+			}
+
+
+
+			FirstThunk++;
+			if (!*(DWORD*)FirstThunk) {
+				break;
+			}
+		}
+
+
+		printf("\n");
+		ImportTable++;
+		if (!ImportTable->OriginalFirstThunk)
+			break;
+	}
+}
+
+
+//dll加载完之后系统会调用GetProcAddress将INT表中的名字全部取出来获取地址填入IAT表
+
+
+//适用于64位可执行文件
+void _PrintImport_x64(IN LPVOID FileBuffer) {
+	//定位PE头
+	PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)FileBuffer;
+	PIMAGE_NT_HEADERS64 NTHeader = (PIMAGE_NT_HEADERS)((DWORD)FileBuffer + (DWORD)DosHeader->e_lfanew);
+	PIMAGE_SECTION_HEADER SectionHeader = (DWORD)&NTHeader->OptionalHeader + NTHeader->FileHeader.SizeOfOptionalHeader;
+
+	//定位导入表
+	PIMAGE_IMPORT_DESCRIPTOR ImportTable = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, (DWORD)(NTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress));
+	if (!NTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress) {
+		printf("[-]IMAGE_DIRECTORY_ENTRY_IMPORT.VirtualAddress为0\n");
+		return;
+	}
+	//DLL名字
+	LPVOID DLLName;
+	//INT表
+	PIMAGE_THUNK_DATA64 ThunkData;
+	//IAT表
+	PIMAGE_THUNK_DATA64 FirstThunk;
+	PIMAGE_IMPORT_BY_NAME FunctionName;
+
+	printf("OriginFirstThunk\n");
+	while (TRUE) {
+
+		DLLName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, ImportTable->Name);
+		printf("[+]DLL名称:%s\n", DLLName);
+
+
+		ThunkData = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, ImportTable->OriginalFirstThunk);
+
+
+		while (TRUE)
+		{
+			//判断最高位是否为1,如果是1表明序号导入,不是1表明名字导如入
+			if (!(*(ULONGLONG*)ThunkData & IMAGE_ORDINAL_FLAG64)) {
+				if (!*(ULONGLONG*)ThunkData) {
+					break;
+				}
+				FunctionName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, *(DWORD*)ThunkData);
+				printf(" - 函数名称:%s\n", FunctionName->Name);
+			}
+			else
+			{
+				printf(" - 导入序号:%d\n", IMAGE_ORDINAL64(*(ULONGLONG*)ThunkData));
+			}
+
+
+
+			ThunkData++;
+			if (!*(DWORD*)ThunkData) {
+				break;
+			}
+		}
+
+
+		printf("\n");
+		ImportTable++;
+		if (!ImportTable->OriginalFirstThunk)
+			break;
+	}
+	//重置导入表
+	ImportTable = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, (DWORD)(NTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress));
+	printf("FirstThunk\n");
+	while (TRUE) {
+
+		DLLName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, ImportTable->Name);
+		printf("[+]DLL名称:%s\n", DLLName);
+
+
+		FirstThunk = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, ImportTable->FirstThunk);
+
+
+		while (TRUE)
+		{
+			//判断最高位是否为1,如果是1表明序号导入,不是1表明名字导如入
+			if (!(*(ULONGLONG*)FirstThunk & IMAGE_ORDINAL_FLAG64)) {
+				if (!*(ULONGLONG*)FirstThunk) {
+					break;
+				}
+				FunctionName = (DWORD)FileBuffer + _RVAToFOA(FileBuffer, *(DWORD*)FirstThunk);
+				printf(" - 函数名称:%s\n", FunctionName->Name);
+			}
+			else
+			{
+				printf(" - 导入序号:%d\n", IMAGE_ORDINAL64(*(ULONGLONG*)FirstThunk));
+			}
+
+
+
+			FirstThunk++;
+			if (!*(ULONGLONG*)FirstThunk) {
+				break;
+			}
+		}
+
+
+		printf("\n");
+		ImportTable++;
+		if (!ImportTable->OriginalFirstThunk)
+			break;
+	}
+}
+
+
+
+//多数程序都没有绑定导入表
+//导入表的作用是可以将dll的地址写死，在运行程序的时候不需要执行INT到IAT表的地址复制操作，可以大大加快程序启动的速度
+//缺点是当程序中的dll发生了变动,或者dll没有占住本该有的IMAGE_BASE,那么程序地址将会出现问题,导致无法运行
+//Win11的系统软件并没有绑定到如表,测试程序：Notepad.exe
+/*********************************************************************************************************************************************************************/
+void _ShowBoundImport(IN LPVOID FileBuffer) {
+	PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)FileBuffer;
+	PIMAGE_NT_HEADERS NTHeader = (PIMAGE_NT_HEADERS)((DWORD)FileBuffer + DosHeader->e_lfanew);
+	
+
+	//定位绑定导入表
+	DWORD BoundImportOffset = (PIMAGE_BOUND_IMPORT_DESCRIPTOR)_RVAToFOA(FileBuffer, (DWORD)NTHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT].VirtualAddress);
+	if (!BoundImportOffset) {
+		printf("[-]IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT:0");
+		return;
+	}
+	PIMAGE_BOUND_IMPORT_DESCRIPTOR BoundImport = (DWORD)FileBuffer + BoundImportOffset;
+}
+
+
+
+void _ShowBoundImport_x64(LPVOID FileBuffer) {
+	PIMAGE_DOS_HEADER DosHeader = (PIMAGE_DOS_HEADER)FileBuffer;
+	PIMAGE_NT_HEADERS64 NTheader = (DWORD)FileBuffer + DosHeader->e_lfanew;
+
+
+	//定位绑定导入表
+	LPVOID BoundImportOffset = (DWORD)NTheader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT].VirtualAddress;
+	if (!BoundImportOffset)
+	{
+		printf("[-]IMAGE_DIERCTORY_ENTRY_BOUND_IMPORT:0");
+		return;
+	}
 
 	
 	
 
 }
+/*********************************************************************************************************************************************************************/
